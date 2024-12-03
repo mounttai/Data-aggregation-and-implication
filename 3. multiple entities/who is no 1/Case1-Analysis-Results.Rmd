@@ -1,0 +1,685 @@
+---
+title: "Case 1 - Who’s #1: INSEAD, Harvard, Wharton, LBS?"
+author: "Dai Yao (dai.yao@nus.edu.sg)"
+date: "28/03/2019"
+output: html_document
+---
+
+**NOTE: You should never share this document with a person who is not taking the course now, or a person who will take the course later. Neither should you post the document online.**
+
+Let's first load the necessary packages and the business school survey data.
+
+```{r load_data, results="hide"}
+
+rm(list=ls())
+
+library(readxl)
+library(dplyr)
+library(reshape2)
+library(ggplot2)
+# for perceptual map
+library(FactoMineR)
+library(factoextra)
+# for visualizing the dendrogram
+library(ggdendro)
+# for discrimination analysis
+library(MASS)
+# for multinomial logit
+library(mlogit)
+
+# raw data
+biz.school.data <- as.data.frame(
+  read_xlsx("Whosn1 Data.xlsx", sheet="Data"))
+```
+
+## Question 1: snake chart
+
+For illustration purpose, we only use the first few questions.
+
+```{r snake_chart}
+# perception raw data
+percep.raw.data <- biz.school.data[
+  , c("SchoolRated", paste("Q17", seq(1, 30), sep="_"))]
+
+# create the perception data for generating perceptual map
+# NOTE: in the last step in the Pipe, you need to use dplyr::select to use the "select" function in dplyr. MASS also has this function, and masks the previous one since it's loaded later
+percep.data <- percep.raw.data %>% 
+  group_by(SchoolRated) %>%
+  mutate(mean1=mean(Q17_1), mean2=mean(Q17_2), 
+         mean4=mean(Q17_4),
+         mean5=mean(Q17_5), mean6=mean(Q17_6),
+         mean8=mean(Q17_8)) %>% 
+  slice(1) %>% dplyr::select(SchoolRated, starts_with("mean"))
+
+# remove the first column
+percep.data = percep.data[, c(-1)]
+# to "melt" the data, we first transpose the data.frame
+percep.data <- t(percep.data)
+
+# specify the rownames and colnames
+colnames(percep.data) <- c("Harvard", "HEC", "IESE", "INSEAD", "Kellogg", "LBS", "Stanford", "Wharton")
+rownames(percep.data) <- c("OneYear", "Students",  "Leadership", "CareerChange", "Location", "MultiLocation")
+
+percep.data <- as.data.frame(percep.data)
+percep.data <- cbind(Attribute=rownames(percep.data), percep.data)
+percep.data$Attribute = as.character(percep.data$Attribute)
+
+percep.data.long <- melt(
+  percep.data, id.vars="Attribute", variable.name="School", value.name="value")
+
+ggplot(data=percep.data.long, aes(
+  x=Attribute, y=value, group=School, color=School)) + 
+  geom_line() + geom_point()
+
+```
+
+**Note:** Creating the snake charts for students from different countries is simple once you can do it for all the students. Thus I omit the results. Same for generating the perceptual maps.
+
+## Question 2: perceptual map
+
+```{r percep_map}
+# we only keep the perception data for different schools
+percep.data = percep.data[, c(-1)]
+# to run PCA, we need to have the schools as rows, and attributes as columns
+percep.data <- t(percep.data)
+bschool.pca <- PCA(percep.data, graph=FALSE)
+```
+
+By plotting the variances explained by each underlying dimensions, we know that for the perception data, 2 dimensions need to be retained (which explain more than 10% of variances in the data).
+
+*Note: Other data may show different patterns.*
+
+```{r}
+fviz_screeplot(bschool.pca, addlabels = TRUE)
+```
+
+Now we can visualize the perceptual map for the various business schools, and the attributes.
+
+```{r}
+fviz_pca_biplot(bschool.pca, axes=c(1, 2), repel=TRUE)
+```
+
+The perceptual maps shows to us that INSEAD is very strong in the second dimension (which is related to location and length of the program), but is only mediocre in the second dimension (which is related to reputation).
+
+## Question 3: optimize the positioning of the INSEAD brand?
+
+## Question 4: segmentation and discrimination analysis
+
+### Q4.1: segmentation analysis
+
+Let's first prepare the segmentation and discrimination data.
+
+```{r}
+# segmentation data
+seg.raw.data <- biz.school.data[, c(
+  "ResponseID", paste("Q6", seq(1, 12), sep="_"), 
+  paste("Q7", seq(1, 10), sep="_"))]
+# we should keep only the 1st record for each student
+seg.data <- seg.raw.data %>% group_by(ResponseID) %>% slice(1)
+
+# discrimination data
+dis.raw.data <- biz.school.data[, c(
+  "ResponseID", "Q1b", "Female", "Age", "Work_exp")]
+dis.data <- dis.raw.data %>% group_by(ResponseID) %>% slice(1)
+# change the column name "Q1b" to be "GMAT"
+colnames(dis.data) <- c("ResponseID", "GMAT", "Female", "Age", "Work_exp")
+```
+
+Some students report -1 as GMAT score, we first set the value to be NA for these students.
+
+```{r}
+dis.data$GMAT[dis.data$GMAT==-1] = NA
+```
+
+Now let's check the completeness of the data.
+
+```{r}
+table(complete.cases(seg.data))
+
+table(complete.cases(dis.data))
+```
+
+The results suggest that for *dis.data*, there are 80 rows with incomplete data. We can either drop those rows, or fill up the missing values with the average. In this illustration, I will just drop those with missing values for simplicity.
+
+```{r}
+dis.data.new = dis.data[complete.cases(dis.data), ]
+seg.data.new = seg.data[complete.cases(dis.data), ]
+```
+
+Now let's calculate the distances between different students, perform the hierarchical clustering, and create the dendrogram plot.
+
+```{r}
+# calculate distance matrix
+dist.matrix = dist(seg.data.new[, c(-1)])
+# perform the hirarchical clustering using complete join method
+pw.cluster.complete = hclust(dist.matrix)
+# create the dendrogram plot
+ggdendrogram(pw.cluster.complete)
+```
+
+The dendrogram plot is complex because all the student ids are overlapping with each other. Nevertheless, we can tentatively cut the tree into three groups, and see if the groups are different (in at least some variables).
+
+**Note:** You may decide to cut the tree into other number of groups based on your own criteria.
+
+```{r}
+groups = cutree(pw.cluster.complete, k=3)
+# display the distribution of students across groups
+table(groups)
+```
+
+We notice that there are only 3 students in the 3rd group, but let's first calculate the average answers for each group.
+
+```{r}
+mean.answers1 = apply(seg.data.new[which(groups==1), c(-1)], 2, mean)
+mean.answers2 = apply(seg.data.new[which(groups==2), c(-1)], 2, mean)
+mean.answers3 = apply(seg.data.new[which(groups==3), c(-1)], 2, mean)
+mean.answers = rbind(mean.answers1, mean.answers2, mean.answers3)
+rownames(mean.answers) <- c("G1", "G2", "G3")
+mean.answers
+```
+
+The groups look reasonable, because each group is quite different from the other groups in at least some variables. So we can cluster the students into three different groups. We now use KMeans to create a more balanced clustering result.
+
+```{r}
+cluster.partition = kmeans(seg.data.new[, c(-1)], 3)
+# now the clustering result is more balanced
+table(cluster.partition$cluster)
+```
+
+We can see the clustering results are much more balanced. You can further check if the three groups are still quite different from each other. For simplicity, I omit this comparison.
+
+### Q4.2: discrimination analysis
+
+To perform the discrimination analysis, we first combine the clustering results with demographic information of the students.
+
+```{r}
+dis.data.new$Group = as.factor(cluster.partition$cluster)
+```
+
+We use a linear discrimination analysis.
+
+```{r}
+seg.lda <- lda(Group ~ GMAT+Female+Age+Work_exp, data=dis.data.new)
+seg.lda
+seg.predict1 = predict(seg.lda)
+table(
+  dis.data.new$Group, seg.predict1$class, 
+  dnn=c('Actual','Predicted'))
+```
+
+The results are not very nice though, because the diagonal elements are not that large for some groups.
+
+*Do you have any idea how to improve the accuracy of discrimination?*
+
+It is important to have enough accuracy. The reason is because discrimination analysis, if done properly as we said in class, could enable us to identify the potential group membership of any new customer (here student), and to understand his or her preference better, which can be very useful for subsequent marketing initiatives.
+
+Let's try to improve the accuracy by looking at the details of the demographic variables. We first check the distribution of *GMAT, Age*, and *Work_exp*.
+
+```{r}
+# let's look at the distribution of GMAT,Age and Work_exp
+table(dis.data.new$GMAT)
+table(dis.data.new$Age)
+table(dis.data.new$Work_exp)
+```
+
+We can see that there are only limited number of values in *Work_exp*. Let's see what will happen if we treat each *Work_exp* value as having a different effect on discrimination.
+
+```{r}
+seg.lda <- lda(Group ~ GMAT+Female+Age+as.factor(Work_exp), data=dis.data.new)
+seg.lda
+seg.predict2 = predict(seg.lda)
+table(
+  dis.data.new$Group, seg.predict2$class, 
+  dnn=c('Actual','Predicted'))
+```
+
+Great! We do see some improvement for one group, but we lose some accuracy for another group. What can you do to further improve the accuracy of the results of discrimination analysis? Try some other ways by yourself.
+
+## Question 5: funnel outcomes
+
+As we said, there are five different stages in the funnel of a student's journal to pursue MBA study: Awareness, Consideration, Application, Favourite, and Top Choice.
+
+We can treat the ourcome of the first four stages as binary (i.e., for each school, the outcome is either yes or no), and the outcome of the last stage as multinomial (i.e., for the two schools evaluated by each student, the outcome is either 1 for the first school to be the top choice, or 2 for the second school to be the top choice, or 0 for neither school to be a top choice).
+
+To construct the data set to estimate a model for the outcomes at each stage, let's first create a vector where the index of each element represents a value of *SchoolRated*, while the actual value of the element is the index of this particular school in Q5 in the survey.
+
+```{r}
+rated.to.eval <- c(1, 9, 10, 4, 6, 2, 8, 3)
+```
+
+**Explanation**: HBS is 1 in *SchoolRated*, it is also the 1st school in Q5. So the first element in *rated.to.eval* is 1. HEC is 2 in *SchoolRated*, however, it is the 9th school in Q5, so the second element in *rated.to.eval* is 9.
+
+**NOTE (on 7 April 2019)**: There is one variable *FunnelPerformance* in the data, which measures the funnel outcome for the school evaluated by a student. It is more convenient to use this variable directly.
+
+We then create a data.frame *funnel.outcomes* with three columns. Column 1 is the id of the respondent. Column 2 is the *SchoolRated*. And column 3 is the answer in Q5 that corresponds to the *SchoolRated*.
+
+```{r}
+funnel.outcomes <- data.frame(cbind(
+  ResponseID=biz.school.data$ResponseID,
+  SchoolRated=biz.school.data$SchoolRated, 
+  outcome=0))
+funnel.outcomes$SchoolRated = as.numeric(funnel.outcomes$SchoolRated)
+funnel.outcomes$outcome = as.numeric(funnel.outcomes$outcome)
+
+# we iterate every row to get the funnel outcome for each school rated
+for (i in 1:nrow(funnel.outcomes)) {
+  # get the rated school
+  school.rated = funnel.outcomes[i, "SchoolRated"]
+  # get the specific index of the rated school in Q5
+  school.eval = rated.to.eval[school.rated]
+  # get the funnel outcome for the rated school
+  funnel.outcomes$outcome[i] = biz.school.data[
+    i, paste("Q5", school.eval, sep="_")]
+}
+table(funnel.outcomes$outcome)
+```
+
+Since there is no 0's anymore in the funnel outcomes (i.e., every school is heard of by the student who rated it), we cannot estimate a model of Awareness (beause all the outcomes are yes, and we don't have the variation to identify the model). Thus, we focus our attention to understand what drives the outcomes at other funnel stages.
+
+To prepare the data set for the other stages (i.e., Consideration, Application, Favourite, and Top Choice), let's first construct the same covariates to be used for all the funnel stages (i.e., Q17_1 to Q17_16).
+
+```{r}
+# Q17_1 to Q17_16
+choice.covariates <- biz.school.data[, c(
+  "ResponseID", paste("Q17", 1:16, sep="_"))]
+attr.names <- c(
+  "OneYear", "Students", "CareerProspect", "Leadership", 
+  "CareerChange", "Location", "Funding", "MultiLoc",
+  "CareerService", "Curriculum", "Research", "Language",
+  "SocialAct", "OnlineCourse", "CorpRelation", "Heritage")
+colnames(choice.covariates) <- c("ResponseID", attr.names)
+```
+
+We then construct the data set for funnel stages 2-4 (i.e., Consideration, Application, and Favourite).
+
+```{r}
+# consideration data, not considered if outcome=1, considered if outcome=2
+consideration = NULL
+# application data, not applied if outcome=2, applied if outcome=3
+application = NULL
+# favourite data, not favourite if outcome=3, favourite if outcome=4 or outcome==5
+favourite = NULL
+
+# construct the three data sets
+for (i in 1:nrow(funnel.outcomes)) {
+  
+  outcome = funnel.outcomes[i, "outcome"]
+  
+  if (outcome==1) {
+    
+    # add one row to consideration, not considered
+    one.row = c(outcome=0, unlist(choice.covariates[i, c(-1)]))
+    consideration <- rbind(consideration, one.row)
+    
+  } else if (outcome==2) {
+    
+    # add one row to consideration, considered
+    one.row = c(outcome=1, unlist(choice.covariates[i, c(-1)]))
+    consideration <- rbind(consideration, one.row)
+    
+    # add one row to application, not applied
+    one.row = c(outcome=0, unlist(choice.covariates[i, c(-1)]))
+    application = rbind(application, one.row)
+    
+  } else if (outcome==3) {
+    
+    # add one row to application, applied
+    one.row = c(outcome=1, unlist(choice.covariates[i, c(-1)]))
+    application = rbind(application, one.row)
+    
+    # add one row to favourite, not favourite
+    one.row = c(outcome=0, unlist(choice.covariates[i, c(-1)]))
+    favourite = rbind(favourite, one.row)
+    
+  } else {
+    
+    # add one row to favourite
+    one.row = c(outcome=1, unlist(choice.covariates[i, c(-1)]))
+    favourite = rbind(favourite, one.row)
+    
+  }
+}
+
+rownames(consideration) <- seq(1, nrow(consideration))
+rownames(application) <- seq(1, nrow(application))
+rownames(favourite) <- seq(1, nrow(favourite))
+
+consideration <- as.data.frame(consideration)
+application <- as.data.frame(application)
+favourite <- as.data.frame(favourite)
+```
+
+Once the data sets are prepared, we can wrap the data into the right *mlogit.data* format and run the logit model using *mlogit*. Take the funnel stage of Consideration as an example, for each school, there are two possible outcomes:
+
+-   yes if the school is/will be/has been considered by the student,
+-   no if not.
+
+For the second option, we assume that the utility from it is normalized to 0. To do so, we create the attribute vector for the option in which all the attributes are 0.
+
+```{r}
+nobs = nrow(consideration)
+
+# two alternatives, 0=no, 1=yes
+num.alts = 2
+# we have 16 different attributes
+num.attrs = 16
+consideration.wide = matrix(
+  0, nrow=nobs, ncol=3+num.alts*num.attrs)
+for (i in 1:nobs) {
+  for (j in 1:1) {
+    row_index = (i-1) * 1 + j
+    consideration.wide[row_index, 1] = i # id
+    consideration.wide[row_index, 2] = j # choiceid
+    # get the outcome for the school
+    choice = consideration$outcome[row_index]
+    if (choice==1) { # if it is yes
+      consideration.wide[row_index, 3] = 1
+    } else {
+      consideration.wide[row_index, 3] = 0
+    }
+    
+    # now fill-up the covariates data
+    # NOTE: we only have the 16 attributes for the school. for 0, we set all values to be 0 (and we need to do nothing)
+    tmp.data = consideration[row_index, c(1+(1:num.attrs))]
+    # topchoice.wide[row_index, c(3+(1:(2*num.attrs)))] = c(t(tmp.data))
+    consideration.wide[row_index, c(3+(1:num.attrs))] = c(t(tmp.data))
+  }
+}
+colnames(consideration.wide) <- c(
+  "id", "choiceid", "choice", 
+  paste(attr.names, 1, sep=""),
+  paste(attr.names, 0, sep="")
+)
+consideration.wide = as.data.frame(consideration.wide)
+head(consideration.wide)
+table(consideration.wide$choice)
+
+```
+
+We can then convert *consideration.wide* to *consideration.long* using *mlogit.data*, and run the MNL model.
+
+```{r}
+consideration.long = mlogit.data(
+  consideration.wide, shape="wide", choice="choice", 
+  varying=3+(1:(num.alts*num.attrs)), sep="", 
+  alt.levels=c("N", "S1"), id="id")
+
+head(consideration.long)
+
+est.consideration.mnl <- mlogit(
+  choice~OneYear+Students+CareerProspect+Leadership+
+    CareerChange+Location+Funding+MultiLoc+
+    CareerService+Curriculum+Research+Language+
+    SocialAct+OnlineCourse+CorpRelation+Heritage, 
+  data=consideration.long)
+
+# the coefficients and their significance levels are available by summarizing the results and getting the "CoefTable" element.
+coefs.consideration.mnl <- summary(est.consideration.mnl)$CoefTable
+```
+
+Alternatively, we can use *glm* to estimate the logit model directly, because logit is a typical form of generalized linear model.
+
+```{r}
+est.consideration <- glm(
+  outcome~OneYear+Students+CareerProspect+Leadership+
+  CareerChange+Location+Funding+MultiLoc+
+  CareerService+Curriculum+Research+Language+
+  SocialAct+OnlineCourse+CorpRelation+Heritage, 
+  data=consideration, family=binomial(link="logit"))
+
+# the coefficients and their significance levels are available also by summarizing the results and getting the "coefficients" element.
+coefs.consideration = summary(est.consideration)$coefficients
+```
+
+Let's compare the coefficient estimates from both estimation methods. To do so, we list the results from the two estimation methods side by side.
+
+```{r}
+cbind(coefs.consideration.mnl[, "Estimate"], coefs.consideration[, "Estimate"])
+```
+
+Even though there are some slight discrepancy for all the coefficients, they are qualitatively indifferent.
+
+**Note:** You can also estimate the model using own estimation code, and you are encouraged to do so.
+
+Let's now run the estimations for other funnel stages, including Application and Favourite. For simplicity, I will just use *glm* for the estimation.
+
+```{r}
+est.application <- glm(
+  outcome~OneYear+Students+CareerProspect+Leadership+
+    CareerChange+Location+Funding+MultiLoc+
+    CareerService+Curriculum+Research+Language+
+    SocialAct+OnlineCourse+CorpRelation+Heritage, 
+  data=application, family=binomial(link="logit"))
+
+est.favourite <- glm(
+  outcome~OneYear+Students+CareerProspect+Leadership+
+    CareerChange+Location+Funding+MultiLoc+
+    CareerService+Curriculum+Research+Language+
+    SocialAct+OnlineCourse+CorpRelation+Heritage, 
+  data=favourite, family=binomial(link="logit"))
+
+# obtain the coefficients and their significance levels.
+coefs.application = summary(est.application)$coefficients
+coefs.favourite = summary(est.favourite)$coefficients
+```
+
+Now that we have all the results for other funnel stages, let's focuse on constructing the data for the last funnel stage, i.e., top choice. First, we need to note that the number of rows in the original data is 919, which is not an even number. This suggests that some students have evaluated only 1 school (*why do you think that happens?*), thus we need to drop these schools, and keep only those who have evaluated 2 schools.
+
+```{r}
+funnel.outcomes <- funnel.outcomes %>%
+  group_by(ResponseID) %>% filter(n()==2)
+choice.covariates <- choice.covariates %>%
+  group_by(ResponseID) %>% filter(n()==2)
+```
+
+Let's further create a variable *alt* to indicate the numbering of the two schools, a variable *top* which equals 1 if the school is chosen as the top choice and 0 if not, and check which school is rated by a student as the top choice.
+
+```{r}
+funnel.outcomes <- funnel.outcomes %>% 
+  mutate(alt=row_number(), top=1*(outcome==5))
+
+table(funnel.outcomes$alt, funnel.outcomes$top)
+```
+
+It is **quite surprising** to see that none of school2 is rated as a top choice (*again, why do you think that happens?*)
+
+To facilitate the investigation of which variables in Q17 (the first 16 questions) affects the top choice decision, we need to resolve the issue that the 2nd school is never chosen as the top choice. We have two approaches.
+
+-   A simple approach: treat the decision for each school as independent, and pool the data for the 1st and 2nd school together.
+-   A more sophisticated approach: randomly swap the 1st school and 2nd school for about 50% of the students.
+
+The simple approach is *really very simple*. It is exactly the same as what we do above for the outcomes of other funnel stages.
+
+```{r}
+topchoice1 <- cbind(
+  top=funnel.outcomes$top, choice.covariates[, c(-1)])
+
+est.top1 <- glm(
+  top~OneYear+Students+CareerProspect+Leadership+
+    CareerChange+Location+Funding+MultiLoc+
+    CareerService+Curriculum+Research+Language+
+    SocialAct+OnlineCourse+CorpRelation+Heritage, 
+  data=topchoice1, family=binomial(link="logit"))
+
+coefs.top1 = summary(est.top1)$coefficients
+```
+
+Now let's discuss the more sophisticated approach. The first step is to generate a random variable (between 0 and 1) for each individual student.
+
+```{r}
+# Note that we only generate one random number for each student
+funnel.outcomes2 <- funnel.outcomes %>%
+  group_by(ResponseID) %>% mutate(rand = runif(1))
+head(funnel.outcomes2)
+# Note that we need to copy the random number as well as alt to the choice.covariates, because we need to swap not only the outcomes for both schools, but also the covariates.
+choice.covariates2 = cbind(
+  alt=funnel.outcomes2$alt, rand=funnel.outcomes2$rand, 
+  choice.covariates)
+head(choice.covariates2)
+```
+
+If *rand* is larger than 0.5, we swap the row of $alt=1$ with that of $alt=2$, for both *funnel.outcomes2* and *choice.covariates2*; if *rand* is less than or equal to 0.5, we do nothing.
+
+```{r}
+# all the indices for which rand>0.5 and alt==1, thus, row.indices represent all the indices for which rand>0.5 and alt==2. We need to swap the alt between row.indices and row.indices+1
+row.indices = which(funnel.outcomes2$rand>0.5 & funnel.outcomes2$alt==1)
+
+funnel.outcomes2$alt[row.indices] = 2
+funnel.outcomes2$alt[row.indices+1] = 1
+
+choice.covariates2$alt[row.indices] = 2
+choice.covariates2$alt[row.indices+1] = 1
+
+funnel.outcomes2 <- funnel.outcomes2 %>% arrange(ResponseID, alt)
+choice.covariates2 <- choice.covariates2 %>% arrange(ResponseID, alt)
+
+table(funnel.outcomes2$alt, funnel.outcomes2$top)
+```
+
+We can see that the swap is successful. Now some 2nd schools are also chosen as the top choice.
+
+```{r}
+topchoice2 <- cbind(
+  top=funnel.outcomes2$top, choice.covariates2[, c(-1:-3)])
+
+nstudents = nrow(funnel.outcomes2) / 2
+```
+
+We now create the *wide* data, so that we can convert it to be a *long* data using *mlogit.data()*.
+
+```{r}
+# we have three alternatives, 0=neither school, 1=1st school, 2=2nd school
+num.alts = 3
+# we have 16 different attributes
+num.attrs = 16
+topchoice.wide = matrix(
+  0, nrow=nstudents, ncol=3+num.alts*num.attrs)
+for (i in 1:nstudents) {
+  for (j in 1:1) {
+    row_index = (i-1) * 1 + j
+    topchoice.wide[row_index, 1] = i # id
+    topchoice.wide[row_index, 2] = j # choiceid
+    # get the two evaluations by student [i]
+    choices = topchoice2$top[(row_index-1)*2+(1:2)]
+    if (choices[1]==1) { # school1 is top choice
+      topchoice.wide[row_index, 3] = 1
+    } else if (choices[2]==1) { # school2 is top choice
+      topchoice.wide[row_index, 3] = 2
+    } else { # neither school is top choice
+      topchoice.wide[row_index, 3] = 3
+    }
+    
+    # now fill-up the covariates data
+    # NOTE: we only have the 16 attributes for school 1&2. for 0, we set all values to be 0 (and we need to do nothing)
+    #tmp.data = topchoice2[(row_index-1)*2+(1:2), c(1+(1:num.attrs))]
+    tmp.data = topchoice2[(row_index-1)*(num.alts-1)+(1:(num.alts-1)), c(1+(1:num.attrs))]
+    # topchoice.wide[row_index, c(3+(1:(2*num.attrs)))] = c(t(tmp.data))
+    topchoice.wide[row_index, c(3+(1:((num.alts-1)*num.attrs)))] = c(t(tmp.data))
+  }
+}
+colnames(topchoice.wide) <- c(
+  "id", "choiceid", "choice", 
+  paste(attr.names, 1, sep=""),
+  paste(attr.names, 2, sep=""),
+  paste(attr.names, 3, sep="")
+)
+topchoice.wide = as.data.frame(topchoice.wide)
+head(topchoice.wide)
+table(topchoice.wide$choice)
+```
+
+We create the *long* data, and run the MNL model.
+
+```{r}
+topchoice.long = mlogit.data(
+  topchoice.wide, shape="wide", choice="choice", 
+  varying=3+(1:(num.alts*num.attrs)), sep="", 
+  alt.levels=c("S1", "S2", "N"), id="id")
+
+head(topchoice.long)
+
+est.mnl <- mlogit(
+  choice~OneYear+Students+CareerProspect+Leadership+
+    CareerChange+Location+Funding+MultiLoc+
+    CareerService+Curriculum+Research+Language+
+    SocialAct+OnlineCourse+CorpRelation+Heritage, 
+  data=topchoice.long, reflevel=3)
+
+# get the coefficients
+coefs.mnl <- summary(est.mnl)$CoefTable
+```
+
+Now let's wrap up all the estimation results, and check what interesting observations we can make.
+
+```{r}
+coefs = cbind(
+  coefs.consideration[, "Estimate"], coefs.application[, "Estimate"], 
+  coefs.favourite[, "Estimate"], coefs.top1[, "Estimate"])
+coefs = rbind(NA, coefs)
+coefs = cbind(coefs, coefs.mnl[, "Estimate"])
+sigs = cbind(
+  coefs.consideration[, "Pr(>|z|)"]<0.05, coefs.application[, "Pr(>|z|)"]<0.05, 
+  coefs.favourite[, "Pr(>|z|)"]<0.05, coefs.top1[, "Pr(>|z|)"]<0.05)
+sigs = rbind(NA, sigs)
+sigs = cbind(sigs, coefs.mnl[, "Pr(>|z|)"]<0.05)
+
+colnames(coefs) <- c(
+  "Consideration", "Application", "Favourite", 
+  "TopChoice", "TopChoice.MNL")
+colnames(sigs) <- c(
+  "Consideration", "Application", "Favourite", 
+  "TopChoice", "TopChoice.MNL")
+
+rownames(coefs) <- c("Intercept1", "Intercept2", attr.names)
+rownames(sigs) <- c("Intercept1", "Intercept2", attr.names)
+
+format(coefs, digits=3)
+sigs
+```
+
+*NOTE: There are two intercepts for the last model, TopChoice.MNL, because there is one intercept for 1st school, and another (different) intercept for 2nd school.*
+
+The results inform us that:
+
+-   for Consideration:
+    -   Corporate relationship has a positive effect
+    -   Research has a negative effect (*why do you think that happens?*)
+-   for Application:
+    -   Leadership really matters
+-   for Favourite, none of these variables matters (*why?*)
+-   for TopChoice:
+    -   OneYear has a positive effect
+    -   Curriculum has a positive effect
+    -   OnlineCourse has a negative effect
+    -   **NOTE: The two intercepts in TopChoice.MNL are very similar; furthermore, all the coefficient estimates are very similar between TopChoice and TopChoice.MNL.**
+
+#### More remarks on Q5
+
+We can model the funnel outcomes as an ordered logit model as well. In this way, we analyze all the funnel stages together, and link the funnel outcome (i.e., Awareness, Consideration, etc.) to Q17. We use *polr* from *MASS* package to estimate the ordered logit model.
+
+```{r}
+funnel <- cbind(outcome=funnel.outcomes$outcome, choice.covariates)
+funnel$outcome = as.factor(funnel$outcome)
+est.funnel <- polr(
+  outcome~OneYear+Students+CareerProspect+Leadership+
+    CareerChange+Location+Funding+MultiLoc+
+    CareerService+Curriculum+Research+Language+
+    SocialAct+OnlineCourse+CorpRelation+Heritage, 
+  data=funnel)
+
+coefs.funnel <- summary(est.funnel)$coefficients
+coefs.funnel
+```
+
+From the results, we can see that there are two sets of coefficients:
+
+-   coefficients for the covariates (i.e., Q17_1 to Q17_16)
+-   some "cut-off" values including 1\|2, 2\|3, 3\|4, 4\|5
+
+The cut-off values serve as the boundaries for the funnel outcomes. In the data, we have five different stages, thus there are four cut-off values. The cut-off value of 1\|2 sets the boundary for Awareness and Consideration. If the utility (coming from the covariates and the coefficients for the covariates) is larger than the cut-off value of 1\|2, then funnel outcome is Consideration; otherwise, it is Awareness. Same interpretations can be applied to other cut-off values. All these cut-off values are significant except that of 1\|2 (based on t-statistics which needs to be either larger than 1.96, or less than -1.96).
+
+Based on the t-statstics, we notice as well that there are three significant coefficients:
+
+-   CareerChange, positive
+-   Curriculum, positive
+-   OnlineCourse, negative probably because if the course from a school is offered online as well, the school becomes less attractive and thus it is less likely to reach higher stages in the funnel.
