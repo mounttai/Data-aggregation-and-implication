@@ -14,4 +14,4 @@ The short course has been offered in two consecutive classes to students in two 
 
 The short course will be incorporated as separate modules in the courses at PolyU at various levels (DBA, PhD, masters, and undergraduates).
 
-Please feel free to reach out to me ([email](mailto:dai@yaod.ai)) if you want to adopt the course in your syllabus.
+Please feel free to reach out to me ([dai@yaod.ai](mailto:dai@yaod.ai)) if you want to adopt the course in your syllabus.
